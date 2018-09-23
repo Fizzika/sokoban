@@ -1,0 +1,454 @@
+unit UnitSoko;
+
+interface
+   uses WinTypes, Classes, Dialogs, Grids, Graphics, Forms;
+   type
+      TMap = array of string;
+      TDxMove = (dxLeft = -1, dxRigth = 1, dxNone = 0);
+      TDyMove = (dyDown = 1, dyUp = -1, dyNone = 0);
+      TMove = packed record
+         PlayerDX: TDxMove;
+         PlayerDY: TDyMove;
+         Char1, Char2, Char3: Char;
+         PoolChange: Integer;
+         IsPushedBox: Boolean;
+      end;
+      PMoveStack = ^TMoveStack;
+      TMoveStack = record
+         Move: TMove;
+         pNext: PMoveStack;
+         pPrev: PMoveStack;
+      end;
+      TMoveStackClass = class
+         pHead: PMoveStack;
+         pTop: PMoveStack;
+         Count: Integer;
+         MaxCount: Integer;
+         constructor Create(const aMaxCount: Integer);
+         function Pop: TMove;
+         procedure Push(const aMove: TMove);
+      end;
+      TRecord = record
+         Moves: Integer;
+         Pushes: Integer;
+         Time: string[8];
+      end;
+   const
+      CWallChar = '#'; CWallPath = 'wall.bmp';
+      CPlayerChar = '!'; CPlayerPath = 'player.bmp';
+      CPoolChar = '+'; CPoolPath = 'pool.bmp';
+      CBoxChar = '%'; CBoxPath = 'box.bmp';
+      CDrawChar = '.'; CDrawPath = 'draw.bmp';
+      CNullChar = '/';
+      CPlayerInPoolChar = '?';
+      CBoxInPoolChar = '@'; CBoxInPoolPath = 'boxinpool.bmp';
+      // animation player
+      CPlayerDownPath = 'playerdown.bmp';
+      CPlayerUpPath = 'playerup.bmp';
+      CPlayerLeftPath = 'playerleft.bmp';
+      CPlayerRightPath = 'playerright.bmp';
+
+      CDefTexturesPath = 'Textures/';
+
+      var
+         PropSize: Integer = 64;
+         StackSize: Integer = 70;
+
+   function GetMapInFile(aPath: string; var aMap: TMap): Boolean;
+   function GetInPath(var aPath: string; aParrent: TComponent): Boolean;
+   procedure MakeBorder(aMap: TMap; aGrid: TDrawGrid; aForm: TForm);
+   procedure DrawGrid(aGrid: TDrawGrid; aMap: TMap);
+   function InitilizeInput(Key: Word; var dx: TDxMove; var dy: TDyMove): Boolean;
+   procedure GetVariables(Map: TMap; var x,y: Integer; var PoolCount: Integer);
+   procedure DrawCell(aGrid: TDrawGrid; aXCoord, aYCoord: Integer;
+      aChar: char);
+   procedure DrawPlayer(aGrid: TDrawGrid; aXCoord, aYCoord: Integer;
+      aDx: TDxMove; aDy: TDyMove);
+   function GetPathFromChar(const aChar: Char): string;
+   function GetRecord(aPath: string; var aRec: TRecord): Boolean;
+   function SaveRecord(aPath: string; const aRec: TRecord): Boolean;
+   function GetPropSize(aXProp, aYProp: Integer): Boolean;
+implementation
+
+uses SysUtils;
+
+const
+   CAllowArr: array[0..7] of Char = (CWallChar, CPlayerChar, CPoolChar, CBoxChar,
+      CDrawChar, CNullChar, CPlayerInPoolChar, CBoxInPoolChar);
+
+   constructor TMoveStackClass.Create(const aMaxCount: Integer);
+   begin
+      MaxCount := aMaxCount;
+   end;
+
+   function TMoveStackClass.Pop: TMove;
+   var
+      Temp: PMoveStack;
+   begin
+      Temp := pHead;
+      Result := pHead^.Move;
+      pHead := pHead^.pNext;
+      Dispose(Temp);
+      Dec(Count);
+   end;
+
+   procedure TMoveStackClass.Push(const aMove: TMove);
+   var
+      Temp: PMoveStack;
+      Temp2: PMoveStack;
+   begin
+      New(Temp);
+      Temp^.Move := aMove;
+      Temp^.pNext := pHead;
+      Temp^.pPrev := nil;
+      if Count > 0 then
+         pHead^.pPrev := Temp;
+      pHead := Temp;
+      if Count = MaxCount then
+      begin
+         Temp2 := pTop;
+         pTop := pTop^.pPrev;
+         pTop^.pNext := nil;
+         Dispose(Temp2)
+      end
+      else
+      begin
+         Inc(Count);
+         if Count = 1 then
+            pTop := pHead
+         else if Count = 2 then
+            pTop^.pPrev := pHead;
+      end;
+   end;
+
+   function IsCorrectField(aMap: TMap): Boolean;
+   var
+      IsCorrect: Boolean;
+   const
+      CVisited = 'v';
+
+   procedure TryMove(aX, aY: Integer);
+   begin
+      if not (IsCorrect) or (aMap[aY, aX] = CVisited) then
+         Exit;
+      if not (aMap[aY, aX] = CWallChar) then
+      begin
+         if (aX = 1) or (aY = 0) or (aX = Length(aMap[aY])) or (aY = High(aMap)) then
+            IsCorrect := False;
+         aMap[aY, aX] := CVisited;
+         TryMove(aX + 1, aY);
+         TryMove(aX, aY - 1);
+         TryMove(aX - 1, aY);
+         TryMove(aX, aY  + 1);
+      end;
+   end;
+
+   label
+      ExitLoop;
+   var
+      PlayerX, PlayerY: Integer;
+      i,j: Integer;
+   begin
+      IsCorrect := True;
+      for i := 0 to High(aMap) do
+         for j := 0 to Length(aMap[i]) do
+            if (aMap[i][j] = CPlayerChar) or (aMap[i][j] = CplayerInPoolChar) then
+            begin
+               TryMove(j, i);
+               goto ExitLoop;
+            end;
+      ExitLoop:
+      Result := IsCorrect;
+   end;
+
+   function GetMapInFile(aPath: string; var aMap: TMap) : Boolean;
+   var
+      InFile: TextFile;
+      i,j,k: Integer;
+      IsCorrect: Boolean;
+      Temp: string;
+      PlayerPosCount: Integer;
+   begin
+      AssignFile(InFile, aPath);
+      Reset(InFile);
+      i := 0;
+      IsCorrect := True;
+      PlayerPosCount := 0;
+      while (not EOF(InFile)) and (IsCorrect) do
+      begin
+         try
+            Readln(InFile, Temp);
+            for j := 1 to Length(Temp) do
+            begin
+               if (Temp[j] = CPlayerChar) or (Temp[j] = CPlayerInPoolChar) then
+                  Inc(PlayerPosCount);
+               IsCorrect := False;
+               for k := 0 to High(CAllowArr) do
+               begin
+                  if Temp[j] = CAllowArr[k] then
+                  begin
+                     IsCorrect := True;
+                     break;
+                  end;
+               end;
+               if not IsCorrect then break;
+            end;
+            Inc(i);
+         except
+            IsCorrect := False;
+         end;
+      end;
+      Close(InFile);
+      if (i = 0) or (PlayerPosCount <> 1) then
+         IsCorrect := False;
+      if IsCorrect then
+      begin
+         SetLength(aMap, i);
+         Reset(InFile);
+         i := 0;
+         while not EOF(InFile) do
+         begin
+            Readln(InFile, aMap[i]);
+            Inc(i);
+         end;
+         Close(InFile);
+      end;
+      if not IsCorrectField(Copy(aMap)) then
+         IsCorrect := False;
+      GeTMapInFile := IsCorrect;
+   end;
+
+   function GetInPath(var aPath: string; aParrent: TComponent): Boolean;
+   var
+      openFile: TOpenDialog;
+   begin
+      openFile := TOpenDialog.Create(aParrent);
+      openFile.Filter := 'Уровни sokoban (*.skb)|*.skb';
+      if openFile.Execute then
+      begin
+         aPath := openFile.FileName;
+         Result := True;
+      end
+      else
+         Result := False;
+      openFile.Destroy;
+   end;
+
+   procedure MakeBorder(aMap: TMap; aGrid: TDrawGrid; aForm: TForm);
+   var
+      MaxColCount: Integer;
+      i: Integer;
+   begin
+      MaxColCount := 0;
+      for i := 0 to High(aMap) do
+      begin
+         if Length(aMap[i]) > MaxColCount then
+            MaxColCount := Length(aMap[i]);
+      end;
+      if GetPropSize(Screen.WorkAreaWidth div MaxColCount,
+         Screen.WorkAreaHeight div Length(aMap)) then
+      begin
+         aGrid.DefaultColWidth := PropSize;
+         aGrid.DefaultRowHeight := PropSize;
+         aGrid.RowCount := Length(aMap);
+         aGrid.Height := Trunc((aGrid.RowCount) * (2 + PropSize));
+         aForm.Height := aGrid.Height + 50;
+         aGrid.ColCount := MaxColCount;
+         aGrid.Width := Trunc((aGrid.ColCount) * (2 + PropSize));
+         aForm.Width := aGrid.Width;
+         aForm.Left := (Screen.WorkAreaWidth - aForm.Width) div 2;
+         aForm.Top := (Screen.WorkAreaHeight - aForm.Height) div 2;
+      end
+      else
+      begin
+         // TODO: To function
+      end;
+   end;
+
+   procedure DrawGrid(aGrid: TDrawGrid; aMap: TMap);
+   var
+      i,j: Integer;
+      Img: TBitmap;
+   begin
+      SetCurrentDir(ExtractFilePath(Application.ExeName));
+      Img := TBitmap.Create;
+      for i := 0 to High(aMap) do
+      begin
+         for j := 1 to Length(aMap[i]) do
+         begin
+            if aMap[i,j] = CNullChar then
+            begin
+               aGrid.Canvas.Brush.Color := aGrid.Color;
+               aGrid.Canvas.FillRect(aGrid.CellRect(j-1, i));
+            end
+            else
+            begin
+               Img.LoadFromFile(GetPathFromChar(aMap[i,j]));
+               aGrid.Canvas.CopyRect(aGrid.CellRect(j-1,i), Img.Canvas,
+                  Rect(0,0,Img.Height,Img.Width))
+            end;
+         end;
+      end;
+      Img.Free;
+   end;
+
+   function InitilizeInput(Key: Word; var dx: TDxMove; var dy: TDyMove): Boolean;
+   begin
+      Result := True;
+      case Key of
+         VK_UP, Ord('K'):
+         begin
+            dx := dxNone;
+            dy := dyUp;
+         end;
+         VK_DOWN, Ord('J'):
+         begin
+            dx := dxNone;
+            dy := dyDown;
+         end;
+         VK_LEFT, Ord('H'):
+         begin
+            dx := dxLeft;
+            dy := dyNone;
+         end;
+         VK_RIGHT, Ord('L'):
+         begin
+            dx := dxRigth;
+            dy := dyNone;
+         end;
+      else
+         Result := False;
+      end;
+   end;
+
+   procedure GetVariables(Map: TMap; var x,y: Integer; var PoolCount: Integer);
+   var
+      i,j: Integer;
+   begin
+      x := 0;
+      y := 0;
+      PoolCount := 0;
+      for i := 0 to High(Map) do
+         for j := 1 to Length(Map[i]) do
+         begin
+            if (Map[i,j] = CPlayerChar) or (Map[i,j] = CPlayerInPoolChar) then
+            begin
+               y := i;
+               x := j;
+            end;
+            if Map[i,j] = CPoolChar then
+               Inc(PoolCount);
+         end;
+   end;
+
+   procedure DrawCell(aGrid: TDrawGrid; aXCoord, aYCoord: Integer;
+      aChar: char);
+   var
+      Img: TBitmap;
+   begin
+      SetCurrentDir(ExtractFilePath(Application.ExeName));
+      if aChar = CNullChar then
+      begin
+         aGrid.Canvas.Brush.Color := aGrid.Color;
+         aGrid.Canvas.FillRect(aGrid.CellRect(aXCoord-1, aYCoord));
+      end
+      else
+      begin
+         Img := TBitmap.Create;
+         Img.LoadFromFile(GetPathFromChar(aChar));
+         aGrid.Canvas.CopyRect(aGrid.CellRect(aXCoord - 1, aYCoord), Img.Canvas,
+            Rect(0,0,Img.Height,Img.Width));
+         Img.Free;
+      end;
+   end;
+
+   procedure DrawPlayer(aGrid: TDrawGrid; aXCoord, aYCoord: Integer;
+      aDx: TDxMove; aDy: TDyMove);
+   var
+      Img: TBitmap;
+      Path: string;
+   begin
+      Img := TBitmap.Create;
+      Path := CDefTexturesPath + IntToStr(PropSize) + '/';
+      case aDx of
+        dxLeft: Path := Path + CPlayerLeftPath;
+        dxRigth: Path := Path + CPlayerRightPath;
+        dxNone:
+         case aDy of
+           dyDown: Path := Path + CPlayerDownPath;
+           dyUp: Path := Path + CPlayerUpPath;
+         end;
+      end;
+      Img.LoadFromFile(Path);
+      aGrid.Canvas.CopyRect(aGrid.CellRect(aXCoord - 1, aYCoord), Img.Canvas,
+         Rect(0,0,Img.Height,Img.Width));
+      Img.Free;
+   end;
+
+   function GetPathFromChar(const aChar: Char): string;  //TODO: to UnitSoko and review code
+   begin
+      Result := CDefTexturesPath + IntToStr(PropSize) + '/';
+      case aChar of
+         CWallChar: Result := Result + CWallPath;
+         CPlayerChar: Result := Result + CPlayerPath;
+         CPlayerInPoolChar: Result := Result + CPlayerPath;
+         CPoolChar: Result := Result + CPoolPath;
+         CBoxChar: Result := Result + CBoxPath;
+         CDrawChar: Result := Result + CDrawPath;
+         CBoxInPoolChar: Result := Result + CBoxInPoolPath;
+      end;
+   end;
+
+   function GetRecord(aPath: string; var aRec: TRecord): Boolean;
+   var
+      InFile: file of TRecord;
+   begin
+      AssignFile(InFile, aPath);
+      try
+         Reset(InFile);
+         Read(InFile, aRec);
+         Result := True;
+      except
+         Result := False;
+      end;
+      Close(InFile);
+   end;
+
+   function SaveRecord(aPath: string; const aRec: TRecord): Boolean;
+   var
+      OutFile: file of TRecord;
+   begin
+      AssignFile(OutFile, aPath);
+      try
+         Rewrite(OutFile);
+         Write(OutFile, aRec);
+         Close(OutFile);
+         Result := True;
+      except
+         Result := False;
+      end;
+   end;
+
+   function GetPropSize(aXProp, aYProp: Integer): Boolean;
+   const
+      CMaxSize = 64;
+      CMinSize = 16;
+   var
+      i: Integer;
+      Min: Integer;
+   begin
+      if aXProp < aYProp then
+         Min := aXProp
+      else
+         Min := aYProp;
+      i := CMaxSize;
+      while (i >= CMinSize) and (Min div i = 0) do
+         Dec(i, 16);
+      if i > 0 then
+         PropSize := i;
+      if Min < CMinSize then
+         GetPropSize := False
+      else
+         GetPropSize := True;
+   end;
+end.

@@ -1,0 +1,368 @@
+unit UnitGame;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, Grids, Menus, UnitSoko, StdCtrls, Buttons, ExtCtrls;
+
+type
+  TFormGame = class(TForm)
+    MainMenu: TMainMenu;
+    NGame: TMenuItem;
+    DrawSoko: TDrawGrid;
+    NHelp: TMenuItem;
+    NDo: TMenuItem;
+    NCancelMove: TMenuItem;
+    NGameRestart: TMenuItem;
+    NExit: TMenuItem;
+    Timer: TTimer;
+    NPause: TMenuItem;
+    procedure FormActivate(Sender: TObject);
+    procedure FormKeyUp(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+    procedure FormPaint(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure RestoreMove;
+    procedure NExitClick(Sender: TObject);
+    procedure NCancelMoveClick(Sender: TObject);
+    procedure DrawCaption;
+    procedure GameRestart;
+    procedure FormClose(Sender: TObject; var Action: TCloseAction);
+    procedure TimerTimer(Sender: TObject);
+    procedure NGameRestartClick(Sender: TObject);
+    procedure NPauseClick(Sender: TObject);
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+    procedure WMMoving(var Msg: TWMMoving); message WM_MOVING;
+  end;
+
+var
+  FormGame: TFormGame;
+  Path: string;
+  LevelName: string;
+
+implementation
+
+{$R *.dfm}
+
+uses
+   {UnitMenu,} DateUtils;
+var
+   Map: TMap;
+   IsGamePlayed: Boolean;
+   X,Y: Integer; // Позиции игрока
+   PoolCount: Integer; //Кол-во лунок
+   Steps, Pushes: Integer;
+   Time: TDateTime;
+   MoveStack: TMoveStackClass;
+
+procedure TFormGame.FormActivate(Sender: TObject);
+begin
+   IsGamePlayed := False;
+   Steps := 0;
+   Pushes := 0;
+end;
+
+procedure DrawOrPool(aGrid: TDrawGrid; x,y: Integer);
+{В зависимости от состояния игрока ставит на его пред. поле лунку или дорогу}
+begin
+   if Map[y,x] = CPlayerChar then
+   begin
+      Map[y,x] := CDrawChar;
+      DrawCell(aGrid, x, y, CDrawChar);
+   end
+   else
+   begin
+      Map[y,x] := CPoolChar;
+      DrawCell(aGrid, x, y, CPoolChar);
+   end;
+end;
+
+procedure TFormGame.RestoreMove;
+var
+   Move: TMove;
+begin
+   if MoveStack.pHead <> nil then
+   begin
+      Move := MoveStack.Pop;
+      if MoveStack.pHead = nil then
+         NCancelMove.Enabled := False;
+      x := x - ord(Move.PlayerDX);
+      y := y - ord(Move.PlayerDY);
+      Map[y,x] := Move.Char1;
+      Map[y + Ord(Move.PlayerDY), x + ord(Move.PlayerDX)] := Move.Char2;
+      Map[y+2*Ord(Move.PlayerDY), x+2*Ord(Move.PlayerDX)] := Move.Char3;
+      DrawPlayer(DrawSoko, x, y, Move.PlayerDX, Move.PlayerDY);
+      DrawCell(DrawSoko, x + ord(Move.PlayerDX), y + Ord(Move.PlayerDY), Move.Char2);
+      DrawCell(DrawSoko, x + 2*ord(Move.PlayerDX), y + 2*Ord(Move.PlayerDY), Move.Char3);
+      if Move.IsPushedBox then
+      begin
+         Dec(Pushes);
+         Dec(PoolCount, Move.PoolChange);
+      end;
+      Dec(Steps);
+      DrawCaption;
+   end;
+end;
+
+procedure TFormGame.FormKeyUp(Sender: TObject; var Key: Word;
+  Shift: TShiftState);
+var
+   dx: TDxMove;
+   dy: TDyMove;
+   Move: TMove;
+   Rec, OldRec: TRecord;
+begin
+   if IsGamePlayed and InitilizeInput(Key, dx, dy) then
+   begin
+      if (Map[y+Ord(dy), x+Ord(dx)] = CDrawChar) or  // Переход на дорогу
+         (Map[y+Ord(dy), x+Ord(dx)] = CPoolChar) then // Переход на лунку
+      begin
+         // Сохраняем ход
+         with Move do
+         begin
+            PlayerDX := dx;
+            PlayerDY := dy;
+            Char1 := Map[y,x];
+            Char2 := Map[y + Ord(dy), x + ord(dx)];
+            Char3 := Map[y+2*Ord(dy), x+2*Ord(dx)];
+            IsPushedBox := False;
+            PoolChange := 0;
+         end;
+         MoveStack.Push(Move);
+         NCancelMove.Enabled := True;
+         if (Map[y+Ord(dy), x+Ord(dx)] = CDrawChar) then //Перешли на дорогу
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerChar
+         else //Перешли на лунку
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerInPoolChar;
+         DrawOrPool(DrawSoko, x, y);
+         x := x + Ord(dx);
+         y := y + Ord(dy);
+         Inc(Steps);
+         DrawPlayer(DrawSoko, x, y, dx, dy);
+      end
+      else if ((Map[y+Ord(dy), x+Ord(dx)] = CBoxChar) or
+      (Map[y+Ord(dy), x+Ord(dx)] = CBoxInPoolChar)) and
+      ((Map[y+2*Ord(dy), x+2*Ord(dx)] = CDrawChar) or
+      (Map[y+2*Ord(dy), x+2*Ord(dx)] = CPoolChar)) then // Двигаем коробку
+      begin
+         // Сохраняем ход
+         with Move do
+         begin
+            PlayerDX := dx;
+            PlayerDY := dy;
+            Char1 := Map[y,x];
+            Char2 := Map[y + Ord(dy), x + ord(dx)];
+            Char3 := Map[y+2*Ord(dy), x+2*Ord(dx)];
+            IsPushedBox := True;
+            PoolChange := 0;
+         end;
+         if (Map[y+2*Ord(dy), x+2*Ord(dx)] = CDrawChar) then // на дорогу
+         begin
+            Map[y+2*Ord(dy), x+2*Ord(dx)] := CBoxChar;
+            DrawCell(DrawSoko, x + 2*Ord(dx), y + 2*Ord(dy), CBoxChar);
+         end;
+         if (Map[y+2*Ord(dy), x+2*Ord(dx)] = CPoolChar) then //на лунку
+         begin
+            Map[y+2*Ord(dy), x+2*Ord(dx)] := CBoxInPoolChar;
+            DrawCell(DrawSoko, x + 2*Ord(dx), y + 2*Ord(dy), CBoxInPoolChar);
+         end;
+         DrawOrPool(DrawSoko, x, y); // вместо игрока ставим лунку или дорогу
+         if (Map[y+Ord(dy), x+Ord(dx)] = CBoxChar) then
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerChar
+         else // На место коробки ставим игрока
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerInPoolChar;
+         //DrawCell(DrawSoko, x + Ord(dx), y + Ord(dy), CPlayerPath);
+         DrawPlayer(DrawSoko, x + Ord(dx), y + Ord(dy), dx, dy);
+         // Увеличиваем счёт задвинутых коробок
+         if (Map[y+Ord(dy), x+Ord(dx)] = CPlayerChar) and
+            (Map[y+2*Ord(dy), x+2*Ord(dx)] = CBoxInPoolChar) then
+            begin
+               Dec(PoolCount);
+               Move.PoolChange := -1;
+            end;
+         // Уменьшаем счёт задвинутых коробок
+         if (Map[y+Ord(dy), x+Ord(dx)] = CPlayerInPoolChar) and
+            (Map[y+2*Ord(dy), x+2*Ord(dx)] = CBoxChar) then
+            begin
+               Inc(PoolCount);
+               Move.PoolChange := 1;
+            end;
+         MoveStack.Push(Move);
+         NCancelMove.Enabled := True;
+         x := x + Ord(dx);
+         y := y + Ord(dy);
+         Inc(Steps);
+         Inc(Pushes);
+         // Проверка на победу
+         if PoolCount = 0 then
+         begin
+            Timer.Enabled := False;
+            Rec.Moves := Steps;
+            Rec.Pushes := Pushes;
+            Rec.Time := TimeToStr(Time);  // Сохраняем текущий счёт
+            if FileExists(Path + '.rec') and GetRecord(Path + '.rec', OldRec) then
+            begin
+               if (Rec.Moves <= OldRec.Moves) and (Rec.Pushes <= OldRec.Pushes) and
+               (Rec.Time <= OldRec.Time) then
+                  SaveRecord(Path + '.rec', Rec);
+            end
+            else
+               SaveRecord(Path + '.rec', Rec);
+            IsGamePlayed := False;
+         end;
+      end;
+      DrawCaption;
+   end
+   else
+   begin
+      case Key of
+         Ord('Q'):
+            FormGame.Close;
+         Ord('R'):
+            GameRestart;
+         Ord('P'):
+         begin
+            IsGamePlayed := not IsGamePlayed;
+            DrawCaption;
+         end;
+      end;
+      if IsGamePlayed then
+      begin
+         case Key of
+            Ord('U'):
+            begin
+               RestoreMove;
+            end;
+         end;
+      end;
+   end;
+end;
+
+procedure TFormGame.FormPaint(Sender: TObject);
+begin
+   if GetMapInFile(Path + '.skb', Map) then
+      IsGamePlayed := True
+   else
+   begin
+      MessageBox(Handle, 'Файл, содержащий данный уровень, неверен!', 'Ошибка',
+         MB_OK + MB_ICONERROR);
+      FormGame.Close;
+   end;
+   if IsGamePlayed then
+   begin
+      MakeBorder(Map, DrawSoko, FormGame);
+      FormGame.Left := (Screen.WorkAreaWidth - FormGame.Width) div 2;
+      FormGame.Top := (Screen.WorkAreaHeight - FormGame.Height) div 2;
+      DrawGrid(DrawSoko, Map);
+      GetVariables(Map, X, Y, PoolCount);
+      IsGamePlayed := True;
+      Steps := 0;
+      Pushes := 0;
+      DrawCaption;
+      Timer.Enabled := True;
+   end;
+end;
+
+procedure TFormGame.GameRestart;
+begin
+   if GetMapInFile(Path + '.skb', Map) then
+   begin
+      IsGamePlayed := True;
+      DrawGrid(DrawSoko, Map);
+      GetVariables(Map, X, Y, PoolCount);
+      IsGamePlayed := True;
+      Steps := 0;
+      Pushes := 0;
+      Time := EncodeTime(0,0,0,0);
+      DrawCaption;
+      FreeAndNil(MoveStack);
+      MoveStack := TMoveStackClass.Create(StackSize);
+      Timer.Enabled := True;
+      MoveStack.Create(StackSize);
+      NCancelMove.Enabled := False;
+   end;
+end;
+
+procedure TFormGame.DrawCaption;
+begin
+   if IsGamePlayed then
+      FormGame.Caption := '[PLAYED] '
+   else
+      FormGame.Caption := '[STOP] ';
+   FormGame.Caption := FormGame.Caption + 'LVL: ' + LevelName +  ' MOVES: ' + IntToStr(Steps) + ' PUSHES: ' +
+      IntToStr(Pushes) + ' TIME: ' + TimeToStr(Time);
+end;
+
+procedure TFormGame.WMMoving(var Msg: TWMMoving);
+var
+  workArea: TRect;
+begin
+  workArea := Screen.WorkareaRect;
+  with Msg.DragRect^ do
+  begin
+    if Left < workArea.Left then
+      OffsetRect(Msg.DragRect^, workArea.Left-Left, 0) ;
+    if Top < workArea.Top then
+      OffsetRect(Msg.DragRect^, 0, workArea.Top-Top) ;
+    if Right > workArea.Right then
+      OffsetRect(Msg.DragRect^, workArea.Right-Right, 0) ;
+    if Bottom > workArea.Bottom then
+      OffsetRect(Msg.DragRect^, 0, workArea.Bottom-Bottom) ;
+  end;
+  inherited;
+end;
+
+procedure TFormGame.FormCreate(Sender: TObject);
+begin
+   MoveStack := TMoveStackClass.Create(StackSize);
+   NCancelMove.Enabled := False;
+   Time := EncodeTime(0,0,0,0);
+   LongTimeFormat := 'hh:mm:ss';
+end;
+
+procedure TFormGame.FormDestroy(Sender: TObject);
+begin
+   FreeAndNil(MoveStack);
+end;
+
+procedure TFormGame.NExitClick(Sender: TObject);
+begin
+   FormGame.Close;
+end;
+
+procedure TFormGame.NCancelMoveClick(Sender: TObject);
+begin
+   RestoreMove;
+end;
+
+procedure TFormGame.FormClose(Sender: TObject; var Action: TCloseAction);
+begin
+   Action := caFree;
+end;
+
+procedure TFormGame.TimerTimer(Sender: TObject);
+begin
+   if IsGamePlayed then
+   begin
+      Time := IncSecond(Time);
+      DrawCaption;
+   end;
+end;
+
+procedure TFormGame.NGameRestartClick(Sender: TObject);
+begin
+   GameRestart;
+end;
+
+procedure TFormGame.NPauseClick(Sender: TObject);
+begin
+   IsGamePlayed := not IsGamePlayed;
+   DrawCaption;
+end;
+
+end.

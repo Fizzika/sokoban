@@ -1,0 +1,49 @@
+object Form1: TForm1
+  Left = 194
+  Top = 157
+  BorderStyle = bsSingle
+  Caption = 'Form1'
+  ClientHeight = 724
+  ClientWidth = 1214
+  Color = clBtnFace
+  Font.Charset = DEFAULT_CHARSET
+  Font.Color = clWindowText
+  Font.Height = -14
+  Font.Name = 'MS Sans Serif'
+  Font.Style = []
+  Menu = MainMenu1
+  OldCreateOrder = False
+  OnActivate = FormActivate
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  OnKeyUp = FormKeyUp
+  OnPaint = FormPaint
+  PixelsPerInch = 120
+  TextHeight = 16
+  object DrawSoko: TDrawGrid
+    Left = 0
+    Top = 0
+    Width = 1873
+    Height = 953
+    BorderStyle = bsNone
+    Ctl3D = True
+    DefaultRowHeight = 64
+    DefaultDrawing = False
+    Enabled = False
+    FixedCols = 0
+    FixedRows = 0
+    Options = [goFixedVertLine, goFixedHorzLine]
+    ParentCtl3D = False
+    TabOrder = 0
+  end
+  object MainMenu1: TMainMenu
+    Left = 680
+    object NGame: TMenuItem
+      Caption = #1048#1075#1088#1072
+      object NLoad: TMenuItem
+        Caption = #1047#1072#1075#1088#1091#1079#1080#1090#1100
+        OnClick = NLoadClick
+      end
+    end
+  end
+end

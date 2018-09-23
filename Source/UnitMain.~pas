@@ -1,0 +1,250 @@
+unit UnitMain;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, Grids, Menus, UnitSoko, StdCtrls, Buttons;
+
+type
+  TForm1 = class(TForm)
+    MainMenu1: TMainMenu;
+    NGame: TMenuItem;
+    NLoad: TMenuItem;
+    DrawSoko: TDrawGrid;
+    procedure NLoadClick(Sender: TObject);
+    procedure FormActivate(Sender: TObject);
+    procedure FormKeyUp(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+    procedure FormPaint(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure RestoreMove;
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+    procedure WMMoving(var Msg: TWMMoving); message WM_MOVING;
+  end;
+
+var
+  Form1: TForm1;
+  Map: TMap;
+  IsMapLoaded: Boolean;
+  X,Y: Integer; // Позиции игрока
+  PoolCount: Integer; //Кол-во лунок
+  Steps, Pushes: Integer;
+  MoveStack: TMoveStackClass;
+
+implementation
+
+{$R *.dfm}
+
+procedure TForm1.NLoadClick(Sender: TObject);
+var
+   Path: string;
+begin
+   if GetInPath(Path, Self) then
+   begin
+      if GetMapInFile(Path, Map) then
+      begin
+         MakeBorder(Map, DrawSoko, Form1);
+         DrawGrid(DrawSoko, Map);
+         GetVariables(Map, X, Y, PoolCount);
+         IsMapLoaded := True;
+         Steps := 0;
+         Pushes := 0;
+      end;
+   end;
+end;
+
+procedure TForm1.FormActivate(Sender: TObject);
+begin
+   IsMapLoaded := False;
+   Steps := 0;
+   Pushes := 0;
+end;
+
+procedure DrawOrPool(aGrid: TDrawGrid; x,y: Integer);
+{В зависимости от состояния игрока ставит на его пред. поле лунку или дорогу}
+begin
+   if Map[y,x] = CPlayerChar then
+   begin
+      Map[y,x] := CDrawChar;
+      DrawCell(aGrid, x, y, CDrawPath);
+   end
+   else
+   begin
+      Map[y,x] := CPoolChar;
+      DrawCell(aGrid, x, y, CPoolPath);
+   end;
+end;
+
+procedure TForm1.RestoreMove;
+var
+   Move: TMove;
+   Path: string;
+begin
+   if MoveStack.pHead <> nil then
+   begin
+      Move := MoveStack.Pop;
+      x := x - ord(Move.PlayerDX);
+      y := y - ord(Move.PlayerDY);
+      Map[y,x] := Move.Char1;
+      Map[y + Ord(Move.PlayerDY), x + ord(Move.PlayerDX)] := Move.Char2;
+      Map[y+2*Ord(Move.PlayerDY), x+2*Ord(Move.PlayerDX)] := Move.Char3;
+      DrawPlayer(DrawSoko, x, y, Move.PlayerDX, Move.PlayerDY);
+      Path := GetPathFromChar(Move.Char2);
+      DrawCell(DrawSoko, x + ord(Move.PlayerDX), y + Ord(Move.PlayerDY), Path);
+      Path := GetPathFromChar(Move.Char3);
+      DrawCell(DrawSoko, x + 2*ord(Move.PlayerDX), y + 2*Ord(Move.PlayerDY), Path);
+      if Move.IsPushedBox then
+      begin
+         Dec(Pushes);
+         Dec(PoolCount, Move.PoolChange);
+      end;
+      Dec(Steps);
+   end;
+end;
+
+procedure TForm1.FormKeyUp(Sender: TObject; var Key: Word;
+  Shift: TShiftState);
+var
+   dx: TDxMove;
+   dy: TDyMove;
+   Move: TMove;
+begin
+   if IsMapLoaded and InitilizeInput(Key, dx, dy) then
+   begin
+      if (Map[y+Ord(dy), x+Ord(dx)] = CDrawChar) or  // Переход на дорогу
+         (Map[y+Ord(dy), x+Ord(dx)] = CPoolChar) then // Переход на лунку
+      begin
+         // Test features
+         with Move do
+         begin
+            PlayerDX := dx;
+            PlayerDY := dy;
+            Char1 := Map[y,x];
+            Char2 := Map[y + Ord(dy), x + ord(dx)];
+            Char3 := Map[y+2*Ord(dy), x+2*Ord(dx)];
+            IsPushedBox := False;
+            PoolChange := 0;
+         end;
+         MoveStack.Push(Move);
+         // End Test feature
+         if (Map[y+Ord(dy), x+Ord(dx)] = CDrawChar) then //Перешли на дорогу
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerChar
+         else //Перешли на лунку
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerInPoolChar;
+         DrawOrPool(DrawSoko, x, y);
+         x := x + Ord(dx);
+         y := y + Ord(dy);
+         Inc(Steps);
+         //DrawCell(DrawSoko, x, y, CPlayerPath);
+         DrawPlayer(DrawSoko, x, y, dx, dy);
+      end
+      else if ((Map[y+Ord(dy), x+Ord(dx)] = CBoxChar) or
+      (Map[y+Ord(dy), x+Ord(dx)] = CBoxInPoolChar)) and
+      ((Map[y+2*Ord(dy), x+2*Ord(dx)] = CDrawChar) or
+      (Map[y+2*Ord(dy), x+2*Ord(dx)] = CPoolChar)) then // Двигаем коробку
+      begin
+         // Test features
+         with Move do
+         begin
+            PlayerDX := dx;
+            PlayerDY := dy;
+            Char1 := Map[y,x];
+            Char2 := Map[y + Ord(dy), x + ord(dx)];
+            Char3 := Map[y+2*Ord(dy), x+2*Ord(dx)];
+            IsPushedBox := True;
+            PoolChange := 0;
+         end;
+         // End Test feature
+         if (Map[y+2*Ord(dy), x+2*Ord(dx)] = CDrawChar) then // на дорогу
+         begin
+            Map[y+2*Ord(dy), x+2*Ord(dx)] := CBoxChar;
+            DrawCell(DrawSoko, x + 2*Ord(dx), y + 2*Ord(dy), CBoxPath);
+         end;
+         if (Map[y+2*Ord(dy), x+2*Ord(dx)] = CPoolChar) then //на лунку
+         begin
+            Map[y+2*Ord(dy), x+2*Ord(dx)] := CBoxInPoolChar;
+            DrawCell(DrawSoko, x + 2*Ord(dx), y + 2*Ord(dy), CBoxInPoolPath);
+         end;
+         DrawOrPool(DrawSoko, x, y); // вместо игрока ставим лунку или дорогу
+         if (Map[y+Ord(dy), x+Ord(dx)] = CBoxChar) then
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerChar
+         else // На место коробки ставим игрока
+            Map[y+Ord(dy), x+Ord(dx)] := CPlayerInPoolChar;
+         //DrawCell(DrawSoko, x + Ord(dx), y + Ord(dy), CPlayerPath);
+         DrawPlayer(DrawSoko, x + Ord(dx), y + Ord(dy), dx, dy);
+         // Увеличиваем счёт задвинутых коробок
+         if (Map[y+Ord(dy), x+Ord(dx)] = CPlayerChar) and
+            (Map[y+2*Ord(dy), x+2*Ord(dx)] = CBoxInPoolChar) then
+            begin
+               Dec(PoolCount);
+               Move.PoolChange := -1;
+            end;
+         // Уменьшаем счёт задвинутых коробок
+         if (Map[y+Ord(dy), x+Ord(dx)] = CPlayerInPoolChar) and
+            (Map[y+2*Ord(dy), x+2*Ord(dx)] = CBoxChar) then
+            begin
+               Inc(PoolCount);
+               Move.PoolChange := 1;
+            end;
+         MoveStack.Push(Move);
+         x := x + Ord(dx);
+         y := y + Ord(dy);
+         Inc(Steps);
+         Inc(Pushes);
+         // Проверка на победу
+         if PoolCount = 0 then
+            MessageBox(Handle, PChar('Победа! Шагов - '  + IntToStr(Steps)), '', MB_OK);
+      end;
+   end
+   else if IsMapLoaded then
+   begin
+      case Key of
+         Ord('U'):
+         begin
+            RestoreMove;
+         end;
+      end;
+   end;
+end;
+
+procedure TForm1.FormPaint(Sender: TObject);
+begin
+   DrawGrid(DrawSoko, Map);  // Draw not correct, fix it!!!
+   // FIXIT - v1 - Kostyl
+end;
+
+procedure TForm1.WMMoving(var Msg: TWMMoving);
+var
+  workArea: TRect;
+begin
+  workArea := Screen.WorkareaRect;
+  with Msg.DragRect^ do
+  begin
+    if Left < workArea.Left then
+      OffsetRect(Msg.DragRect^, workArea.Left-Left, 0) ;
+    if Top < workArea.Top then
+      OffsetRect(Msg.DragRect^, 0, workArea.Top-Top) ;
+    if Right > workArea.Right then
+      OffsetRect(Msg.DragRect^, workArea.Right-Right, 0) ;
+    if Bottom > workArea.Bottom then
+      OffsetRect(Msg.DragRect^, 0, workArea.Bottom-Bottom) ;
+  end;
+  inherited;
+end;
+
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+   MoveStack := TMoveStackClass.Create(CStackSize);
+end;
+
+procedure TForm1.FormDestroy(Sender: TObject);
+begin
+   FreeAndNil(MoveStack);
+end;
+
+end.
